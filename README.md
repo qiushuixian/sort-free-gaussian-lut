@@ -1,5 +1,14 @@
 # Unofficial Implementation of Sort-Free Gaussian Splatting
 
+包括LUT代替光栅化中的除法和用插值加速光栅化
+lut代码在submodules/diff-gaussian-rasterization/cuda_rasterizer/forward.cu的第741-791行
+插值和lut在同一函数中
+插值部分没有真的在代码上实现间隔渲染，只是在分组渲染完成后把不需要渲染的像素的颜色和权重设置成0，然后进行插值
+
+lut仅测试的推理为测试训练，所以需要先按 https://github.com/LiYukeee/sort-free-gs 进行训练，然后把t710.sh里render部分的地址替换成训练结果的实际地址，运行脚本配环境和渲染
+
+
+
 This is an unofficial implementation of the ICLR'25 paper "Sort-free Gaussian Splatting via Weighted Sum Rendering". [Paper](https://arxiv.org/pdf/2410.18931)
 
 Our implementation builds upon the original 3DGS by incorporating global parameters `sigma` and `weight_background`, as well as a set of `sh` parameters for each GS to decode the view-dependent effects `Vi`.
