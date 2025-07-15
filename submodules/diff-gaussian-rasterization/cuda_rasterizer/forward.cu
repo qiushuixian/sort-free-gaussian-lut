@@ -420,15 +420,11 @@ __device__ float3 anchor_computeCov2D(const float3& mean, float focal_x, float f
 
 	return { float(cov[0][0]), float(cov[0][1]), float(cov[1][1]) };
 }
-// Main rasterization method. Collaboratively works on one tile per
-// block, each thread treats one pixel. Alternates between fetching 
-// and rasterizing data.
-
 __device__ unsigned long long g_total_count = 0; 
 __device__ unsigned long long g_total_count_1 = 0; 
 __device__ unsigned long long g_total_count_2 = 0; 
 __device__ unsigned long long g_total_count_3 = 0; 
-
+__device__ unsigned long long  num_of_iter=0;
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
@@ -482,8 +478,8 @@ renderCUDA(
     unsigned long long count1 = 0;
     unsigned long long count2 = 0;
     unsigned long long count3 = 0;
-    float x1=25.0f; 
-    float x2=50.0f;
+    float x1=40.0f; 
+    float x2=100.0f;
     float max_alpha_sum=0.0f;
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -612,7 +608,7 @@ renderCUDA(
 
     if (inside)
     {
-        if ((threadIdx.x%2!=0||threadIdx.y%2!=0)&&threadIdx.x!=15&&threadIdx.y!=15)
+        if ((threadIdx.x%2!=0||threadIdx.y%2!=0)&&(threadIdx.x!=15&&threadIdx.y!=15))
         {
             if (threadIdx.x%2==1&&threadIdx.y%2==0)
             {
@@ -657,7 +653,7 @@ renderCUDA(
     {
         for (int ch = 0; ch < CHANNELS; ch++)
 			{
-                out_color[ch * H * W + pix_id]=(threadIdx.x%3==0&&threadIdx.y%3==0) ? (Cc[ch]+bg_color[ch] * weight_background) : 0;
+                out_color[ch * H * W + pix_id]=(threadIdx.x%3==0&&threadIdx.y%3==0)  ? (Cc[ch]+bg_color[ch] * weight_background) : 0;
                 
             }
         weight_sum[pix_id]=alpha_sum_c;
@@ -741,8 +737,32 @@ renderCUDA(
     if (inside)
     {
         weight_sum_float=(alpha_sum_a+alpha_sum_b+alpha_sum_c);
-        
-        if (weight_sum_float<=4.0f)
+    
+        if (weight_sum_float<=0.25f)
+        {
+            weight_sum_int=(int) (weight_sum_float*256.0f+0.5f);
+            weight_sum_final=(float) weight_sum_int/256.0f; 
+            //weight_sum_final=weight_sum_float;   
+        }
+        if (weight_sum_float<=0.5f)
+        {
+            weight_sum_int=(int) (weight_sum_float*128.0f+0.5f);
+            weight_sum_final=(float) weight_sum_int/128.0f; 
+            //weight_sum_final=weight_sum_float;   
+        }
+        else if (weight_sum_float<=1.0f)
+        {
+            weight_sum_int=(int) (weight_sum_float*64.0f+0.5f);
+            weight_sum_final=(float) weight_sum_int/64.0f; 
+            //weight_sum_final=weight_sum_float;   
+        }
+        else if (weight_sum_float<=2.0f)
+        {
+            weight_sum_int=(int) (weight_sum_float*32.0f+0.5f);
+            weight_sum_final=(float) weight_sum_int/32.0f; 
+            //weight_sum_final=weight_sum_float;   
+        }
+        else if (weight_sum_float<=4.0f)
         {
             weight_sum_int=(int) (weight_sum_float*16.0f+0.5f);
             weight_sum_final=(float) weight_sum_int/16.0f; 
@@ -789,30 +809,34 @@ renderCUDA(
         {
             weight_sum_final=513.0f;
         }
+        weight_sum_final=fmax(weight_sum_final,0.5f/256.0f);
         for (int ch = 0; ch < CHANNELS; ch++)
 			{
                 out_color[ch * H * W + pix_id]=(Ca[ch]+Cb[ch]+Cc[ch])/weight_sum_final;
                 
                 
             }
-        weight_sum[pix_id]=alpha_sum_a+alpha_sum_b+alpha_sum_c;
+        weight_sum[pix_id]=weight_sum_final;
         if (abs(alpha_sum_a+alpha_sum_b+alpha_sum_c)>max_alpha_sum)
         {
             max_alpha_sum=abs(alpha_sum_a+alpha_sum_b+alpha_sum_c);
         }
     }
     if (blockIdx.x == 20 && blockIdx.y == 20 && threadIdx.x == 0 && threadIdx.y == 0) 
+    {
+        atomicAdd(&num_of_iter, 1);
+    }
+    if (blockIdx.x == 20 && blockIdx.y == 20 && threadIdx.x == 0 && threadIdx.y == 0&&num_of_iter%499==0) 
         {
-            printf("Total valid gaussians sampled: %llu\n", g_total_count);
-            printf("Total valid gaussians_1 sampled: %llu\n", g_total_count_1);
-            printf("Total valid gaussians_2 sampled: %llu\n", g_total_count_2);
-            printf("Total valid gaussians_3 sampled: %llu\n", g_total_count_3);
-            printf("Ratio: %f\n", (float) (g_total_count_1+g_total_count_2*0.37f+g_total_count_3*0.1112f)/g_total_count);
-            printf("Max_sum: %f\n", (float) max_alpha_sum);
+            //printf("Total valid gaussians sampled: %llu\n", g_total_count);
+            //printf("Total valid gaussians_1 sampled: %llu\n", g_total_count_1);
+            //printf("Total valid gaussians_2 sampled: %llu\n", g_total_count_2);
+            //printf("Total valid gaussians_3 sampled: %llu\n", g_total_count_3);
+            printf("Ratio_forward: %f\n", (float) (g_total_count_1+g_total_count_2*0.37f+g_total_count_3/16.0f)/g_total_count);
+            //printf("Max_sum: %f\n", (float) max_alpha_sum);
         }
 	
 }
-
 
 void FORWARD::render(
 	const float weight_background,
