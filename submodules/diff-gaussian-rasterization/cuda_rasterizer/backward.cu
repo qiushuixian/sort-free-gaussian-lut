@@ -432,6 +432,11 @@ __global__ void preprocessCUDA(
 		computeCov3D(idx, scales[idx], scale_modifier, rotations[idx], dL_dcov3D, dL_dscale, dL_drot);
 }
 
+__device__ unsigned long long backward_g_total_count = 0; 
+__device__ unsigned long long backward_g_total_count_1 = 0; 
+__device__ unsigned long long backward_g_total_count_2 = 0; 
+__device__ unsigned long long backward_g_total_count_3 = 0;
+__device__ unsigned long long  num_of_iter=0;
 // Backward version of the rendering procedure.
 template <uint32_t C>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
@@ -451,7 +456,8 @@ renderCUDA(
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
-	float* __restrict__ dL_dweight_background
+	float* __restrict__ dL_dweight_background,
+    const int* radii
 	)
 {
 	// We rasterize again. Compute necessary block info.
@@ -477,7 +483,12 @@ renderCUDA(
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float collected_alpha_weight[BLOCK_SIZE];
 
-
+    float x1=60.0f;
+    float x2=90.0f;
+    unsigned long long count = 0; 
+    unsigned long long count1 = 0;
+    unsigned long long count2 = 0;
+    unsigned long long count3 = 0;
 	const float WS = inside ? weight_sum[pix_id] : 0.0f;
 	float CS[C] = {0.0f};
 	float dL_dpixel[C] = {0.0f};
@@ -557,10 +568,36 @@ renderCUDA(
 				max_alpha = alpha;
 			//////////color//////////
 			// const int global_id = collected_id[j];
+
+            
+            float w=abs(collected_alpha_weight[j]*con_o.w);
+            float k=radii[global_id]/w;
 			for (int ch = 0; ch < C; ch++)
 			{
+                count++;
 				const float dL_dchannel = dL_dpixel[ch];
-				atomicAdd(&(dL_dcolors[global_id * C + ch]), dL_dchannel * alpha / WS);
+                if (k<x1)
+                {
+                    atomicAdd(&(dL_dcolors[global_id * C + ch]), dL_dchannel * alpha / WS);
+                    count1++;
+                }
+                else if (k<x2)
+                {
+                    if (pix.x%2==0&&pix.y%2==0)
+                    {
+                        atomicAdd(&(dL_dcolors[global_id * C + ch]), 4.0f*dL_dchannel * alpha / WS);   
+                    }
+                    count2++;
+                }
+                else
+                {
+                    if (pix.x%3==0&&pix.y%3==0)
+                    {
+                        atomicAdd(&(dL_dcolors[global_id * C + ch]), 9.0f*dL_dchannel * alpha / WS);
+                    }
+                    count3++;
+                }
+				
 			}
 
 			//////////render_alpha//////////
@@ -584,19 +621,76 @@ renderCUDA(
 			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
-			// Update gradients w.r.t. 2D mean position of the Gaussian
-			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+            if (k<x1)
+            {
+                // Update gradients w.r.t. 2D mean position of the Gaussian
+			    atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
+			    atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
 
-			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
-			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
+			    // Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
+			    atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
+			    atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
+			    atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
 
-			// actually dL_d( opacity_i * v_i * (1 - depth_i/sigma)), calculate their gradients separately in `BACKWARD::preprocess`.
-			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+			    // actually dL_d( opacity_i * v_i * (1 - depth_i/sigma)), calculate their gradients separately in `BACKWARD::preprocess`.
+			    atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+            }
+            else if (k<x2)
+            {                    
+                if (pix.x%2==0&&pix.y%2==0)
+                {
+                    // Update gradients w.r.t. 2D mean position of the Gaussian
+			        atomicAdd(&dL_dmean2D[global_id].x, 4.0f*dL_dG * dG_ddelx * ddelx_dx);
+			        atomicAdd(&dL_dmean2D[global_id].y, 4.0f*dL_dG * dG_ddely * ddely_dy);
+
+			        // Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
+			        atomicAdd(&dL_dconic2D[global_id].x, -0.5f *  4.0f*gdx * d.x * dL_dG);
+			        atomicAdd(&dL_dconic2D[global_id].y, -0.5f *  4.0f*gdx * d.y * dL_dG);
+			        atomicAdd(&dL_dconic2D[global_id].w, -0.5f *  4.0f*gdy * d.y * dL_dG);
+
+			        // actually dL_d( opacity_i * v_i * (1 - depth_i/sigma)), calculate their gradients separately in `BACKWARD::preprocess`.
+			        atomicAdd(&(dL_dopacity[global_id]),  4.0f*G * dL_dalpha);
+                }
+            }
+            else
+            {
+                if (pix.x%3==0&&pix.y%3==0)
+                {
+                    // Update gradients w.r.t. 2D mean position of the Gaussian
+			        atomicAdd(&dL_dmean2D[global_id].x, 9.0f*dL_dG * dG_ddelx * ddelx_dx);
+			        atomicAdd(&dL_dmean2D[global_id].y, 9.0f*dL_dG * dG_ddely * ddely_dy);
+
+			        // Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
+			        atomicAdd(&dL_dconic2D[global_id].x, -0.5f * 9.0f*gdx * d.x * dL_dG);
+			        atomicAdd(&dL_dconic2D[global_id].y, -0.5f * 9.0f*gdx * d.y * dL_dG);
+			        atomicAdd(&dL_dconic2D[global_id].w, -0.5f * 9.0f*gdy * d.y * dL_dG);
+
+			        // actually dL_d( opacity_i * v_i * (1 - depth_i/sigma)), calculate their gradients separately in `BACKWARD::preprocess`.
+			        atomicAdd(&(dL_dopacity[global_id]), 9.0f*G * dL_dalpha);
+                }
+            }
+
+			
 		}
 	}
+    atomicAdd(&backward_g_total_count, count);
+    atomicAdd(&backward_g_total_count_1, count1);
+    atomicAdd(&backward_g_total_count_2, count2);
+    atomicAdd(&backward_g_total_count_3, count3);
+    if (blockIdx.x == 20 && blockIdx.y == 20 && threadIdx.x == 0 && threadIdx.y == 0) 
+    {
+        atomicAdd(&num_of_iter, 1);
+    }
+    if (blockIdx.x == 20 && blockIdx.y == 20 && threadIdx.x == 0 && threadIdx.y == 0&&num_of_iter%499==0) 
+        {
+            
+            printf("Total valid gaussians sampled: %llu\n", backward_g_total_count);
+            printf("Total valid gaussians_1 sampled: %llu\n", backward_g_total_count_1);
+            printf("Total valid gaussians_2 sampled: %llu\n", backward_g_total_count_2);
+            printf("Total valid gaussians_3 sampled: %llu\n", backward_g_total_count_3);
+            printf("Ratio: %f\n", (float) (backward_g_total_count_1+backward_g_total_count_2*0.25f+backward_g_total_count_3/9.0f)/backward_g_total_count);
+            
+        }
 	//////////dense_score//////////
 	// Each pixel’s dense_score is calculated as 
 	// the product of the error_map 
